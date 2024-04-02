@@ -8,7 +8,7 @@ type Msg struct {
 
 type Entry struct {
 	Term float64
-	Op   Operation
+	Op   *Operation
 }
 
 type Operation struct {

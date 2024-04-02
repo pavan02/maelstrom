@@ -190,7 +190,7 @@ func (raft *RaftNode) requestVotes() error {
 
 	// Broadcast vote request
 	raft.brpc(
-		structs.RequestVoteMsgBody{
+		&structs.RequestVoteMsgBody{
 			Type:         structs.MsgTypeRequestVote,
 			Term:         raft.currentTerm,
 			CandidateId:  raft.nodeId,
@@ -251,10 +251,13 @@ func (raft *RaftNode) advanceStateMachine() (bool, error) {
 	if raft.lastApplied < raft.commitIndex {
 		// Advance the applied index and apply that Op
 		raft.lastApplied += 1
-		response := raft.stateMachine.apply(raft.log.get(raft.lastApplied).Op)
-		if raft.state == StateLeader {
-			// We were the leader, let's respond to the Client.
-			raft.net.send(response.Dest, response.Body)
+
+		if raft.log.get(raft.lastApplied).Op != nil {
+			response := raft.stateMachine.apply(*raft.log.get(raft.lastApplied).Op)
+			if raft.state == StateLeader {
+				// We were the leader, let's respond to the Client.
+				raft.net.send(response.Dest, response.Body)
+			}
 		}
 	}
 	return true, nil

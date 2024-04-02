@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/pavan/maelstrom/demo/go/raft/structs"
 	"github.com/samber/lo"
+	logger "log"
 )
 
 type Log struct {
@@ -20,6 +21,7 @@ func (log *Log) init() {
 
 func (log *Log) get(index int) structs.Entry {
 	// Return a log entry by index. Note that Raft's log is 1-indexed.
+	logger.Printf("log.Entries: %s, index: %d", fmt.Sprint(log.Entries), index)
 	return log.Entries[index-1]
 }
 

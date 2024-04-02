@@ -46,7 +46,7 @@ type AppendEntriesMsgBody struct {
 	LeaderCommit int     `mapstructure:"leader_commit" json:"leader_commit"`
 }
 
-func (res AppendEntriesMsgBody) SetMsgId(msgId float64) {
+func (res *AppendEntriesMsgBody) SetMsgId(msgId float64) {
 	res.MsgId = msgId
 }
 
@@ -59,6 +59,6 @@ type RequestVoteMsgBody struct {
 	LastLogTerm  float64 `mapstructure:"last_log_term" json:"last_log_term"`
 }
 
-func (res RequestVoteMsgBody) SetMsgId(msgId float64) {
+func (res *RequestVoteMsgBody) SetMsgId(msgId float64) {
 	res.MsgId = msgId
 }

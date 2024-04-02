@@ -63,7 +63,7 @@ func (raft *RaftNode) replicateLog() (bool, error) {
 
 				raft.net.rpc(
 					nodeId,
-					structs.AppendEntriesMsgBody{
+					&structs.AppendEntriesMsgBody{
 						Type:         structs.MsgTypeAppendEntries,
 						Term:         raft.currentTerm,
 						LeaderId:     raft.nodeId,

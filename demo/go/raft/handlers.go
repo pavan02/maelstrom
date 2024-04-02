@@ -26,7 +26,7 @@ func (raft *RaftNode) setupHandlers() error {
 
 		log.Println("I am: ", raft.nodeId)
 
-		raft.net.reply(msg, structs.InitOkMsgBody{
+		raft.net.reply(msg, &structs.InitOkMsgBody{
 			Type: structs.MsgTypeInitOk,
 		})
 		return nil
@@ -64,7 +64,7 @@ func (raft *RaftNode) setupHandlers() error {
 			raft.resetElectionDeadline()
 		}
 
-		raft.net.reply(msg, structs.RequestVoteResMsgBody{
+		raft.net.reply(msg, &structs.RequestVoteResMsgBody{
 			Type:         structs.MsgTypeRequestVoteResult,
 			Term:         raft.currentTerm,
 			VotedGranted: grant,
@@ -96,7 +96,7 @@ func (raft *RaftNode) setupHandlers() error {
 
 		if appendEntriesMsgBody.Term < raft.currentTerm {
 			// leader is behind us
-			raft.net.reply(msg, result)
+			raft.net.reply(msg, &result)
 			return nil
 		}
 
@@ -112,7 +112,7 @@ func (raft *RaftNode) setupHandlers() error {
 		if appendEntriesMsgBody.PrevLogIndex >= len(raft.log.Entries) ||
 			(raft.log.get(appendEntriesMsgBody.PrevLogIndex).Term != appendEntriesMsgBody.PrevLogTerm) {
 			// We disagree on the previous term
-			raft.net.reply(msg, result)
+			raft.net.reply(msg, &result)
 			return nil
 		}
 
@@ -127,7 +127,7 @@ func (raft *RaftNode) setupHandlers() error {
 
 		// Acknowledge
 		result.Success = true
-		raft.net.reply(msg, result)
+		raft.net.reply(msg, &result)
 		return nil
 	}
 
@@ -143,14 +143,14 @@ func (raft *RaftNode) setupHandlers() error {
 			op.Client = msg.Src
 			raft.log.append([]structs.Entry{{
 				Term: raft.currentTerm,
-				Op:   op,
+				Op:   &op,
 			}})
 		} else if raft.leaderId != "" {
 			// We're not the leader, but we can proxy To one
 			msg.Dest = raft.leaderId
 			raft.net.sendMsg(msg)
 		} else {
-			raft.net.reply(msg, structs.ErrorMsgBody{
+			raft.net.reply(msg, &structs.ErrorMsgBody{
 				Type: structs.MsgTypeError,
 				Code: 11,
 				Text: "not a leader",

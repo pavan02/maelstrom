@@ -25,12 +25,12 @@ func (kvStore *KVStore) apply(op structs.Operation) structs.OperationResponse {
 	// Handle state transition
 	if t == structs.MsgTypeRead {
 		if value, ok := kvStore.state[k]; ok {
-			body = structs.ReadOkMsgBody{
+			body = &structs.ReadOkMsgBody{
 				Type:  structs.MsgTypeReadOk,
 				Value: value,
 			}
 		} else {
-			body = structs.ErrorMsgBody{
+			body = &structs.ErrorMsgBody{
 				Type: structs.MsgTypeError,
 				Code: structs.ErrCodeKeyDoesNotExist,
 				Text: structs.ErrTxtNotFound,
@@ -38,25 +38,25 @@ func (kvStore *KVStore) apply(op structs.Operation) structs.OperationResponse {
 		}
 	} else if t == structs.MsgTypeWrite {
 		kvStore.state[k] = op.Value
-		body = structs.WriteOkMsgBody{
+		body = &structs.WriteOkMsgBody{
 			Type: structs.MsgTypeWriteOk,
 		}
 	} else if t == structs.MsgTypeCas {
 		if value, ok := kvStore.state[k]; !ok {
-			body = structs.ErrorMsgBody{
+			body = &structs.ErrorMsgBody{
 				Type: structs.MsgTypeError,
 				Code: structs.ErrCodeKeyDoesNotExist,
 				Text: structs.ErrTxtNotFound,
 			}
 		} else if value != op.From {
-			body = structs.ErrorMsgBody{
+			body = &structs.ErrorMsgBody{
 				Type: structs.MsgTypeError,
 				Code: structs.ErrCodePreconditionFailed,
 				Text: fmt.Sprintf(structs.ErrExpectedButHad, op.From, value),
 			}
 		} else {
 			kvStore.state[k] = op.To
-			body = structs.CasOkMsgBody{
+			body = &structs.CasOkMsgBody{
 				Type: structs.MsgTypeCasOk,
 			}
 		}
