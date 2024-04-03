@@ -53,7 +53,7 @@ type RaftNode struct {
 
 func (raft *RaftNode) init() error {
 	// Heartbeats & timeouts
-	raft.electionTimeout = 2           // Time before election, in seconds
+	raft.electionTimeout = 3           // Time before election, in seconds
 	raft.heartbeatInterval = 1         // Time between heartbeats, in seconds
 	raft.minReplicationInterval = 0.05 // Don't replicate TOO frequently
 	raft.electionDeadline = 0          // Next election, in epoch seconds

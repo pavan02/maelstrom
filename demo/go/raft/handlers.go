@@ -109,8 +109,7 @@ func (raft *RaftNode) setupHandlers() error {
 			return fmt.Errorf("out of bounds previous log index %d \n", appendEntriesMsgBody.PrevLogIndex)
 		}
 
-		if appendEntriesMsgBody.PrevLogIndex >= len(raft.log.Entries) ||
-			(raft.log.get(appendEntriesMsgBody.PrevLogIndex).Term != appendEntriesMsgBody.PrevLogTerm) {
+		if appendEntriesMsgBody.PrevLogIndex < len(raft.log.Entries) && (appendEntriesMsgBody.PrevLogTerm != raft.log.get(appendEntriesMsgBody.PrevLogIndex).Term) {
 			// We disagree on the previous term
 			raft.net.reply(msg, &result)
 			return nil
