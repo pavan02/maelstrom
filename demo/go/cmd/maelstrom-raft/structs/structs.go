@@ -7,23 +7,23 @@ type Msg struct {
 }
 
 type Entry struct {
-	Term float64
+	Term int
 	Op   *Operation
 }
 
 type Operation struct {
 	// all op
 	Type   MsgType
-	MsgId  float64
-	Key    float64
+	MsgId  int
+	Key    int
 	Client string
 
 	// for write op
-	Value float64
+	Value int
 
 	// for cas op
-	From float64
-	To   float64
+	From int
+	To   int
 }
 
 type OperationResponse struct {
@@ -63,5 +63,5 @@ const (
 const (
 	ErrNotLeader      = "not a leader"
 	ErrTxtNotFound    = "not found"
-	ErrExpectedButHad = "expected %f but had %f"
+	ErrExpectedButHad = "expected %d but had %d"
 )
