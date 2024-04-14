@@ -27,10 +27,6 @@ type RaftNode struct {
 	stepDownDeadline       int64
 	lastReplication        int64
 
-	// Node and cluster IDs
-	nodeId  string
-	nodeIds []string
-
 	// Raft State
 	state       string
 	currentTerm int
@@ -49,7 +45,9 @@ type RaftNode struct {
 	stateMachine *KVStore
 
 	// Concurrency Locks
-	mu sync.Mutex
+	mu                sync.Mutex
+	becomeCandidateMu sync.Mutex
+	becomeFollowerMu  sync.Mutex
 }
 
 func (raft *RaftNode) init() error {
@@ -58,24 +56,20 @@ func (raft *RaftNode) init() error {
 	raft.heartbeatInterval = 1         // Time between heartbeats, in seconds
 	raft.minReplicationInterval = 0.05 // Don't replicate TOO frequently
 	raft.electionDeadline = 0          // Next election, in epoch seconds
-	raft.stepDownDeadline = 0          // When To step down automatically
-	raft.lastReplication = 0           // Last replication, in epoch seconds
-
-	// Node & cluster IDs
-	raft.nodeId = ""
-	raft.nodeIds = []string{}
+	//raft.stepDownDeadline = 0          // When To step down automatically
+	//raft.lastReplication = 0           // Last replication, in epoch seconds
 
 	// Raft State
 	raft.state = StateFollower
 	raft.currentTerm = 0
 	raft.votedFor = ""
-	raft.commitIndex = 0
-	raft.lastApplied = 1 // index: 0 -> Op: None
-	raft.leaderId = ""   // Who do we think the leader is?
-
-	// Leader State
-	raft.nextIndex = map[string]int{}
-	raft.matchIndex = map[string]int{}
+	//raft.commitIndex = 0
+	//raft.lastApplied = 1 // index: 0 -> Op: None
+	//raft.leaderId = ""   // Who do we think the leader is?
+	//
+	//// Leader State
+	//raft.nextIndex = map[string]int{}
+	//raft.matchIndex = map[string]int{}
 
 	// Components
 	raft.log = newLog()
@@ -90,8 +84,8 @@ func (raft *RaftNode) init() error {
 
 func (raft *RaftNode) otherNodes() []string {
 	// All nodes except this one
-	return lo.Filter(raft.nodeIds, func(nodeId string, _ int) bool {
-		return nodeId != raft.nodeId
+	return lo.Filter(raft.node.NodeIDs(), func(nodeId string, _ int) bool {
+		return nodeId == raft.node.ID()
 	})
 }
 
@@ -109,6 +103,7 @@ func (raft *RaftNode) otherNodes() []string {
 
 func (raft *RaftNode) brpc(body map[string]interface{}, handler maelstrom.HandlerFunc) {
 	// Broadcast an RPC message To all other nodes, and call handler with each response.
+	log.Printf("in brpc otherNodes %v\n", raft.otherNodes())
 	for _, nodeId := range raft.otherNodes() {
 		raft.node.RPC(nodeId, body, handler)
 	}
@@ -150,15 +145,15 @@ func (raft *RaftNode) maybeStepDown(remoteTerm int) error {
 }
 
 func (raft *RaftNode) requestVotes() {
-	raft.mu.Lock()
-	defer raft.mu.Unlock()
+	//raft.mu.Lock()
+	//defer raft.mu.Unlock()
 	// Request that other nodes vote for us as a leader
 
 	votes := map[string]bool{}
 	term := raft.currentTerm
 
 	// We vote for our-self
-	votes[raft.nodeId] = true
+	votes[raft.node.ID()] = true
 
 	handler := func(msg maelstrom.Message) error {
 		raft.mu.Lock()
@@ -197,7 +192,7 @@ func (raft *RaftNode) requestVotes() {
 		map[string]interface{}{
 			"type":           structs.MsgTypeRequestVote,
 			"term":           raft.currentTerm,
-			"candidate":      raft.nodeId,
+			"candidate":      raft.node.ID(),
 			"last_log_index": raft.log.size(),
 			"last_log_term":  raft.log.lastTerm(),
 		},
@@ -218,8 +213,8 @@ func (raft *RaftNode) becomeFollower() {
 }
 
 func (raft *RaftNode) becomeCandidate() error {
-	raft.mu.Lock()
-	defer raft.mu.Unlock()
+	raft.becomeCandidateMu.Lock()
+	defer raft.becomeCandidateMu.Unlock()
 	if raft.electionDeadline < time.Now().Unix() {
 		raft.state = StateCandidate
 		raft.advanceTerm(raft.currentTerm + 1)
@@ -368,6 +363,7 @@ func newRaftNode() (*RaftNode, error) {
 		for {
 			select {
 			case <-becomeCandidateTicker.C:
+
 				raft.becomeCandidate()
 			}
 		}

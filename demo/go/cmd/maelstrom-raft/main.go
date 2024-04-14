@@ -29,5 +29,7 @@ func main() {
 		panic(err)
 	}
 
-	raft.node.Run()
+	if err := raft.node.Run(); err != nil {
+		panic(err)
+	}
 }

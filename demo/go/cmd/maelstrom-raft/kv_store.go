@@ -19,6 +19,7 @@ func (kvStore *KVStore) init() {
 
 func (kvStore *KVStore) apply(op structs.Operation) structs.ResponseBody {
 	kvStore.wu.Lock()
+	defer kvStore.wu.Unlock()
 	// Applies an op to the state machine, and returns a response message.
 	t := op.Type
 	k := op.Key
@@ -65,8 +66,6 @@ func (kvStore *KVStore) apply(op structs.Operation) structs.ResponseBody {
 	}
 
 	log.Printf("KV:\n %v \n", kvStore.state)
-
-	kvStore.wu.Unlock()
 	return body
 }
 
