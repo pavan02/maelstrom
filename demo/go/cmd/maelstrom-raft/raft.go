@@ -50,16 +50,18 @@ type RaftNode struct {
 	advanceTermMu           sync.Mutex
 	resetElectionDeadlineMu sync.Mutex
 	requestVotesMu          sync.Mutex
+	requestVoteHandlerMu    sync.Mutex
 	maybeStepDownMu         sync.Mutex
+	becomeLeaderMu          sync.Mutex
 }
 
 func (raft *RaftNode) init() error {
 	// Heartbeats & timeouts
-	raft.electionTimeout = 2           // Time before election, in seconds
-	raft.heartbeatInterval = 1         // Time between heartbeats, in seconds
-	raft.minReplicationInterval = 0.05 // Don't replicate TOO frequently
-	raft.electionDeadline = 0          // Next election, in epoch seconds
-	//raft.stepDownDeadline = 0          // When To step down automatically
+	raft.electionTimeout = 2                      // Time before election, in seconds
+	raft.heartbeatInterval = 1                    // Time between heartbeats, in seconds
+	raft.minReplicationInterval = 0.05            // Don't replicate TOO frequently
+	raft.electionDeadline = 0                     // Next election, in epoch seconds
+	raft.stepDownDeadline = time.Now().UnixNano() // When To step down automatically
 	//raft.lastReplication = 0           // Last replication, in epoch seconds
 
 	// Raft State
@@ -152,8 +154,8 @@ func (raft *RaftNode) maybeStepDown(remoteTerm int) {
 }
 
 func (raft *RaftNode) requestVotes() {
-	//raft.mu.Lock()
-	//defer raft.mu.Unlock()
+	raft.requestVotesMu.Lock()
+	defer raft.requestVotesMu.Unlock()
 	// Request that other nodes vote for us as a leader
 
 	votes := map[string]bool{}
@@ -182,12 +184,12 @@ func (raft *RaftNode) requestVotes() {
 			votes[msg.Src] = true
 			log.Println("have votes " + fmt.Sprint(votes))
 
-			//if majority(len(raft.nodeIds)) <= len(votes) {
-			//	// We have a majority of votes for this Term
-			//	if err := raft.becomeLeader(); err != nil {
-			//		return err
-			//	}
-			//}
+			if majority(len(raft.node.NodeIDs())) <= len(votes) {
+				// We have a majority of votes for this Term
+				if err := raft.becomeLeader(); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	}
@@ -197,12 +199,34 @@ func (raft *RaftNode) requestVotes() {
 		map[string]interface{}{
 			"type":           structs.MsgTypeRequestVote,
 			"term":           raft.currentTerm,
-			"candidate":      raft.node.ID(),
+			"candidate_id":   raft.node.ID(),
 			"last_log_index": raft.log.size(),
 			"last_log_term":  raft.log.lastTerm(),
 		},
 		handler,
 	)
+}
+
+func (raft *RaftNode) becomeLeader() error {
+	raft.becomeLeaderMu.Lock()
+	defer raft.becomeLeaderMu.Unlock()
+	if raft.state != StateCandidate {
+		return fmt.Errorf("should be a candidate")
+	}
+
+	raft.state = StateLeader
+	//raft.leaderId = ""
+	//raft.lastReplication = 0 // Start replicating immediately
+	// We'll start by trying To replicate our most recent entry
+	//for _, nodeId := range raft.otherNodes() {
+	//	raft.nextIndex[nodeId] = raft.log.size() + 1
+	//	raft.matchIndex[nodeId] = 0
+	//}
+	//raft.resetStepDownDeadline()
+	log.Println("Became leader for term", raft.currentTerm)
+	//log.Println("nextIndex:" + fmt.Sprint(raft.nextIndex))
+	//log.Println("otherNodes:" + fmt.Sprint(raft.otherNodes()))
+	return nil
 }
 
 //func (raft *RaftNode) becomeFollower() {
@@ -234,25 +258,6 @@ func (raft *RaftNode) becomeCandidate() {
 	//}
 }
 
-//	func (raft *RaftNode) becomeLeader() error {
-//		if raft.state != StateCandidate {
-//			return fmt.Errorf("should be a candidate")
-//		}
-//
-//		raft.state = StateLeader
-//		raft.leaderId = ""
-//		raft.lastReplication = 0 // Start replicating immediately
-//		// We'll start by trying To replicate our most recent entry
-//		for _, nodeId := range raft.otherNodes() {
-//			raft.nextIndex[nodeId] = raft.log.size() + 1
-//			raft.matchIndex[nodeId] = 0
-//		}
-//		raft.resetStepDownDeadline()
-//		log.Println("Became leader for Term", raft.currentTerm)
-//		log.Println("nextIndex:" + fmt.Sprint(raft.nextIndex))
-//		log.Println("otherNodes:" + fmt.Sprint(raft.otherNodes()))
-//		return nil
-//	}
 //
 //	func (raft *RaftNode) stepDownOnTimeout() (bool, error) {
 //		// If we haven't received any acks for a while, step down.

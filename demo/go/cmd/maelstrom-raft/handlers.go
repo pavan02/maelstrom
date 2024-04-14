@@ -24,6 +24,8 @@ import (
 
 // When a node requests our vote...
 func (raft *RaftNode) requestVote(msg maelstrom.Message) error {
+	raft.requestVoteHandlerMu.Lock()
+	defer raft.requestVoteHandlerMu.Unlock()
 	var requestVoteMsgBody structs.RequestVoteMsgBody
 	if err := json.Unmarshal(msg.Body, &requestVoteMsgBody); err != nil {
 		return err
@@ -41,17 +43,23 @@ func (raft *RaftNode) requestVote(msg maelstrom.Message) error {
 	} else if requestVoteMsgBody.LastLogTerm == raft.log.lastTerm() && requestVoteMsgBody.LastLogIndex < raft.log.size() {
 		log.Printf("our logs are both at Term %d but our log is %d and theirs is only %d \n", raft.log.lastTerm(), raft.log.size(), requestVoteMsgBody.LastLogIndex)
 	} else {
+		log.Printf("before raft.votedFor %s\n", raft.votedFor)
+		log.Printf("CandidateId: %s\n", requestVoteMsgBody.CandidateId)
 		log.Printf("Granting vote To %s\n", msg.Src)
 		grant = true
 		raft.votedFor = requestVoteMsgBody.CandidateId
 		raft.resetElectionDeadline()
+		log.Printf("after raft.votedFor %s\n", raft.votedFor)
 	}
 
-	raft.node.Reply(msg, map[string]interface{}{
+	err := raft.node.Reply(msg, map[string]interface{}{
 		"type":         structs.MsgTypeRequestVoteResult,
 		"term":         raft.currentTerm,
 		"vote_granted": grant,
 	})
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
