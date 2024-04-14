@@ -2,25 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 	"github.com/pavan/maelstrom/demo/go/cmd/maelstrom-raft/structs"
 	"log"
 )
-
-// Handle initialization message
-//func (raft *RaftNode) raftInit(msg Msg) error {
-//	if raft.state != StateNascent {
-//		return fmt.Errorf("Can't init twice")
-//	}
-//
-//	raft.setNodeId(msg.Body.NodeId)
-//	raft.nodeIds = msg.Body.NodeIds
-//	//raft.becomeFollower()
-//
-//	log.Println("I am: ", raft.nodeId)
-//	raft.net.reply(msg, map[string]interface{}{"type": initOkMsgBodyType})
-//	return nil
-//}
 
 // When a node requests our vote...
 func (raft *RaftNode) requestVote(msg maelstrom.Message) error {
@@ -64,60 +50,83 @@ func (raft *RaftNode) requestVote(msg maelstrom.Message) error {
 	return nil
 }
 
-//func (raft *RaftNode) appendEntries(msg Msg) error {
-//	log.Println("begin func appendEntries", msg)
-//	if err := raft.maybeStepDown(msg.Body.Term); err != nil {
-//		return err
-//	}
-//
-//	result := map[string]interface{}{
-//		"type":    appendEntriesResultMsgType,
-//		"term":    raft.currentTerm,
-//		"success": false,
-//	}
-//
-//	if msg.Body.Term < raft.currentTerm {
-//		// leader is behind us
-//		log.Println("leader is behind us func appendEntries", msg.Body.Term, raft.currentTerm)
-//		raft.net.reply(msg, result)
-//		return nil
-//	}
-//
-//	// This leader is valid; remember them and don't try to run our own election for a bit
-//	raft.leaderId = msg.Body.LeaderId
-//	raft.resetElectionDeadline()
-//
-//	// Check previous entry To see if it matches
-//	if msg.Body.PrevLogIndex <= 0 {
-//		return fmt.Errorf("out of bounds previous log index %d \n", msg.Body.PrevLogIndex)
-//	}
-//
-//	if msg.Body.PrevLogIndex < len(raft.log.Entries) && (msg.Body.PrevLogTerm != raft.log.get(msg.Body.PrevLogIndex).Term) {
-//		// We disagree on the previous Term
-//		log.Println("We disagree on the previous Term func appendEntries", msg.Body.Term, raft.currentTerm)
-//		raft.net.reply(msg, result)
-//		return nil
-//	}
-//
-//	// We agree on the previous log Term; truncate and append
-//	raft.log.truncate(msg.Body.PrevLogIndex)
-//	raft.log.append(msg.Body.Entries)
-//
-//	// Advance commit pointer
-//	if raft.commitIndex < msg.Body.LeaderCommit {
-//		raft.commitIndex = min(msg.Body.LeaderCommit, raft.log.size())
-//	}
-//
-//	log.Println("end func appendEntries", msg)
-//	// Acknowledge
-//	result["success"] = true
-//	raft.net.reply(msg, result)
-//	return nil
-//}
+func (raft *RaftNode) appendEntries(msg maelstrom.Message) error {
+	raft.appendEntriesHandlerMu.Lock()
+	defer raft.appendEntriesHandlerMu.Unlock()
+
+	log.Println("begin func appendEntries", msg)
+	var appendEntriesMsgBody structs.AppendEntriesMsgBody
+	err := json.Unmarshal(msg.Body, &appendEntriesMsgBody)
+	if err != nil {
+		panic(err)
+	}
+
+	raft.maybeStepDown(appendEntriesMsgBody.Term)
+
+	result := map[string]interface{}{
+		"type":    structs.MsgTypeAppendEntriesResult,
+		"term":    raft.currentTerm,
+		"success": false,
+	}
+
+	if appendEntriesMsgBody.Term < raft.currentTerm {
+		// leader is behind us
+		log.Println("leader is behind us func appendEntries", appendEntriesMsgBody.Term, raft.currentTerm)
+		raft.node.Reply(msg, result)
+		return nil
+	}
+
+	// This leader is valid; remember them and don't try to run our own election for a bit
+	//raft.leaderId = appendEntriesMsgBody.LeaderId
+	raft.resetElectionDeadline()
+
+	// Check previous entry To see if it matches
+	if appendEntriesMsgBody.PrevLogIndex <= 0 {
+		panic(fmt.Errorf("out of bounds previous log index %d \n", appendEntriesMsgBody.PrevLogIndex))
+	}
+
+	if appendEntriesMsgBody.PrevLogIndex > len(raft.log.Entries) || (appendEntriesMsgBody.PrevLogTerm != raft.log.get(appendEntriesMsgBody.PrevLogIndex).Term) {
+		// We disagree on the previous term
+		log.Println("We disagree on the previous Term func appendEntries", appendEntriesMsgBody.Term, raft.currentTerm)
+		raft.node.Reply(msg, result)
+		return nil
+	}
+
+	// We agree on the previous log Term; truncate and append
+	raft.log.truncate(appendEntriesMsgBody.PrevLogIndex)
+	raft.log.append(appendEntriesMsgBody.Entries)
+
+	// Advance commit pointer
+	if raft.commitIndex < appendEntriesMsgBody.LeaderCommit {
+		raft.commitIndex = min(appendEntriesMsgBody.LeaderCommit, raft.log.size())
+	}
+
+	log.Println("end func appendEntries", msg)
+	// Acknowledge
+	result["success"] = true
+	raft.node.Reply(msg, result)
+	return nil
+}
 
 func (raft *RaftNode) setupHandlers() error {
 	// Handle Client KV requests
 	kvRequests := func(msg maelstrom.Message, op structs.Operation) error {
+		raft.kvRequestsMu.Lock()
+		defer raft.kvRequestsMu.Unlock()
+
+		if raft.state != StateLeader {
+			raft.node.Reply(msg, &structs.ErrorMsgBody{
+				Type: structs.MsgTypeError,
+				Code: 11,
+				Text: "not a leader",
+			})
+		}
+
+		//op.Client = msg.Src
+		raft.log.append([]structs.Entry{{
+			Term: raft.currentTerm,
+			Op:   &op,
+		}})
 		res := raft.stateMachine.apply(op)
 		if err := raft.node.Reply(msg, res); err != nil {
 			panic(err)
@@ -177,5 +186,6 @@ func (raft *RaftNode) setupHandlers() error {
 	raft.node.Handle(string(structs.MsgTypeWrite), kvWriteRequest)
 	raft.node.Handle(string(structs.MsgTypeCas), kvCasRequest)
 	raft.node.Handle(string(structs.MsgTypeRequestVote), raft.requestVote)
+	raft.node.Handle(string(structs.MsgTypeAppendEntries), raft.appendEntries)
 	return nil
 }

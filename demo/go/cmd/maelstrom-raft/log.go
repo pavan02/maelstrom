@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/pavan/maelstrom/demo/go/cmd/maelstrom-raft/structs"
+	"github.com/samber/lo"
 	logger "log"
 )
 
@@ -44,20 +45,18 @@ func (log *Log) size() int {
 	return len(log.Entries)
 }
 
-//
-//func (log *Log) truncate(size int) {
-//	// Truncate the log to this many entries
-//	log.Entries = lo.Slice(log.Entries, 0, size)
-//}
-//
-//func (log *Log) fromIndex(index int) ([]structs.Entry, error) {
-//	if index <= 0 {
-//		panic(fmt.Errorf("illegal index %d", index))
-//		return nil, fmt.Errorf("illegal index %d", index)
-//	}
-//
-//	return lo.Slice(log.Entries, index-1, len(log.Entries)+1), nil
-//}
+func (log *Log) truncate(size int) {
+	// Truncate the log to this many entries
+	log.Entries = lo.Slice(log.Entries, 0, size)
+}
+
+func (log *Log) fromIndex(index int) []structs.Entry {
+	if index <= 0 {
+		panic(fmt.Errorf("illegal index %d", index))
+	}
+
+	return lo.Slice(log.Entries, index-1, len(log.Entries))
+}
 
 func newLog() *Log {
 	log := Log{}

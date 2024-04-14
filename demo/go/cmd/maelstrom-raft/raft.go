@@ -6,6 +6,7 @@ import (
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 	"github.com/pavan/maelstrom/demo/go/cmd/maelstrom-raft/structs"
 	"github.com/samber/lo"
+	"golang.org/x/exp/maps"
 	"golang.org/x/exp/rand"
 	"log"
 	"sync"
@@ -21,23 +22,24 @@ const (
 
 type RaftNode struct {
 	electionTimeout        time.Duration
-	heartbeatInterval      float64
-	minReplicationInterval float64
-	electionDeadline       int64
-	stepDownDeadline       int64
-	lastReplication        int64
+	heartbeatInterval      time.Duration
+	minReplicationInterval time.Duration
+
+	electionDeadline int64
+	stepDownDeadline int64
+	lastReplication  int64
 
 	// Raft State
 	state       string
 	currentTerm int
 	votedFor    string
+
+	// Leader state
+	nextIndex   map[string]int
+	matchIndex  map[string]int
 	commitIndex int
 	lastApplied int
 	leaderId    string
-
-	// Leader state
-	nextIndex  map[string]int
-	matchIndex map[string]int
 
 	// Components
 	log          *Log
@@ -51,30 +53,35 @@ type RaftNode struct {
 	resetElectionDeadlineMu sync.Mutex
 	requestVotesMu          sync.Mutex
 	requestVoteHandlerMu    sync.Mutex
+	appendEntriesHandlerMu  sync.Mutex
 	maybeStepDownMu         sync.Mutex
 	becomeLeaderMu          sync.Mutex
+	kvRequestsMu            sync.Mutex
+	replicateLogMu          sync.Mutex
+	appendEntriesResMu      sync.Mutex
 }
 
 func (raft *RaftNode) init() error {
 	// Heartbeats & timeouts
-	raft.electionTimeout = 2 * time.Second        // Time before election, in seconds
-	raft.heartbeatInterval = 1                    // Time between heartbeats, in seconds
-	raft.minReplicationInterval = 0.05            // Don't replicate TOO frequently
+	raft.electionTimeout = 2 * time.Second              // Time before election, in seconds
+	raft.heartbeatInterval = 1 * time.Second            // Time between heartbeats, in seconds
+	raft.minReplicationInterval = 50 * time.Millisecond // Don't replicate TOO frequently
+
 	raft.electionDeadline = time.Now().UnixNano() // Next election, in epoch seconds
 	raft.stepDownDeadline = time.Now().UnixNano() // When To step down automatically
-	//raft.lastReplication = 0           // Last replication, in epoch seconds
+	raft.lastReplication = time.Now().UnixNano()  // Last replication, in epoch seconds
 
 	// Raft State
 	raft.state = StateFollower
 	raft.currentTerm = 0
 	raft.votedFor = ""
-	//raft.commitIndex = 0
+
+	// Leader State
+	raft.nextIndex = map[string]int{}
+	raft.matchIndex = map[string]int{}
+	raft.commitIndex = 0
 	//raft.lastApplied = 1 // index: 0 -> Op: None
 	//raft.leaderId = ""   // Who do we think the leader is?
-	//
-	//// Leader State
-	//raft.nextIndex = map[string]int{}
-	//raft.matchIndex = map[string]int{}
 
 	// Components
 	raft.log = newLog()
@@ -96,12 +103,13 @@ func (raft *RaftNode) otherNodes() []string {
 	})
 }
 
-//	func (raft *RaftNode) getMatchIndex() map[string]int {
-//		// Returns the map of match indices, including an entry for ourselves, based on our log size.
-//		clonedMap := maps.Clone(raft.matchIndex)
-//		clonedMap[raft.nodeId] = raft.log.size()
-//		return clonedMap
-//	}
+func (raft *RaftNode) getMatchIndex() map[string]int {
+	// Returns the map of match indices, including an entry for ourselves, based on our log size.
+	clonedMap := maps.Clone(raft.matchIndex)
+	clonedMap[raft.node.ID()] = raft.log.size()
+	return clonedMap
+}
+
 //
 //	func (raft *RaftNode) setNodeId(id string) {
 //		raft.nodeId = id
@@ -217,12 +225,15 @@ func (raft *RaftNode) becomeLeader() error {
 
 	raft.state = StateLeader
 	//raft.leaderId = ""
-	//raft.lastReplication = 0 // Start replicating immediately
+	raft.lastReplication = 0 // Start replicating immediately
+
 	// We'll start by trying To replicate our most recent entry
-	//for _, nodeId := range raft.otherNodes() {
-	//	raft.nextIndex[nodeId] = raft.log.size() + 1
-	//	raft.matchIndex[nodeId] = 0
-	//}
+	raft.matchIndex = map[string]int{}
+	raft.nextIndex = map[string]int{}
+	for _, nodeId := range raft.otherNodes() {
+		raft.nextIndex[nodeId] = raft.log.size() + 1
+		raft.matchIndex[nodeId] = 0
+	}
 	raft.resetStepDownDeadline()
 	log.Println("Became leader for term", raft.currentTerm)
 	//log.Println("nextIndex:" + fmt.Sprint(raft.nextIndex))
@@ -252,8 +263,8 @@ func (raft *RaftNode) becomeFollower() {
 	defer raft.becomeFollowerMu.Unlock()
 
 	raft.state = StateFollower
-	//raft.nextIndex = map[string]int{}
-	//raft.matchIndex = map[string]int{}
+	raft.nextIndex = nil
+	raft.matchIndex = nil
 	//raft.leaderId = ""
 	raft.resetElectionDeadline()
 	log.Println("Became follower for term", raft.currentTerm)
@@ -398,6 +409,18 @@ func newRaftNode() (*RaftNode, error) {
 				if raft.state == StateLeader && raft.stepDownDeadline < time.Now().UnixNano() {
 					log.Println("Stepping down: haven't received any acks recently")
 					raft.becomeFollower()
+				}
+			}
+		}
+	}()
+
+	replicateLogTicker := time.NewTicker(raft.minReplicationInterval)
+	go func() {
+		for {
+			select {
+			case <-replicateLogTicker.C:
+				if err := raft.replicateLog(); err != nil {
+					panic(err)
 				}
 			}
 		}
