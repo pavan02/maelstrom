@@ -45,9 +45,12 @@ type RaftNode struct {
 	stateMachine *KVStore
 
 	// Concurrency Locks
-	mu                sync.Mutex
-	becomeCandidateMu sync.Mutex
-	becomeFollowerMu  sync.Mutex
+	becomeCandidateMu       sync.Mutex
+	becomeFollowerMu        sync.Mutex
+	advanceTermMu           sync.Mutex
+	resetElectionDeadlineMu sync.Mutex
+	requestVotesMu          sync.Mutex
+	maybeStepDownMu         sync.Mutex
 }
 
 func (raft *RaftNode) init() error {
@@ -79,13 +82,15 @@ func (raft *RaftNode) init() error {
 		return err
 	}
 
+	// random seed
+	rand.Seed(uint64(time.Now().UnixNano()))
 	return nil
 }
 
 func (raft *RaftNode) otherNodes() []string {
 	// All nodes except this one
 	return lo.Filter(raft.node.NodeIDs(), func(nodeId string, _ int) bool {
-		return nodeId == raft.node.ID()
+		return nodeId != raft.node.ID()
 	})
 }
 
@@ -110,9 +115,10 @@ func (raft *RaftNode) brpc(body map[string]interface{}, handler maelstrom.Handle
 }
 
 func (raft *RaftNode) resetElectionDeadline() {
-	raft.mu.Lock()
-	defer raft.mu.Unlock()
+	raft.resetElectionDeadlineMu.Lock()
+	defer raft.resetElectionDeadlineMu.Unlock()
 	temp := int64(float64(raft.electionTimeout) * (rand.Float64() + 1.0))
+	log.Printf("resetElectionDeadline by seconds %d\n", temp)
 	raft.electionDeadline = time.Now().Unix() + temp
 }
 
@@ -121,8 +127,9 @@ func (raft *RaftNode) resetElectionDeadline() {
 //		raft.stepDownDeadline = time.Now().Unix() + raft.electionTimeout
 //	}
 func (raft *RaftNode) advanceTerm(term int) {
-	raft.mu.Lock()
-	defer raft.mu.Unlock()
+	raft.advanceTermMu.Lock()
+	defer raft.advanceTermMu.Unlock()
+	log.Println("advanceTerm acquired lock")
 	// Advance our Term To `Term`, resetting who we voted for.
 	if raft.currentTerm >= term {
 		panic(fmt.Errorf("Can't go backwards"))
@@ -130,16 +137,17 @@ func (raft *RaftNode) advanceTerm(term int) {
 
 	raft.currentTerm = term
 	raft.votedFor = ""
+	log.Println("advanceTerm release lock")
 }
 
 func (raft *RaftNode) maybeStepDown(remoteTerm int) {
-	raft.mu.Lock()
-	defer raft.mu.Unlock()
+	raft.maybeStepDownMu.Lock()
+	defer raft.maybeStepDownMu.Unlock()
 	// If remoteTerm is bigger than ours, advance our term and become a follower.
 	if raft.currentTerm < remoteTerm {
 		log.Printf("Stepping down: remote term %d higher than our term %d", remoteTerm, raft.currentTerm)
 		raft.advanceTerm(remoteTerm)
-		raft.becomeFollower()
+		//raft.becomeFollower()
 	}
 }
 
@@ -155,8 +163,8 @@ func (raft *RaftNode) requestVotes() {
 	votes[raft.node.ID()] = true
 
 	handler := func(msg maelstrom.Message) error {
-		raft.mu.Lock()
-		defer raft.mu.Unlock()
+		raft.requestVotesMu.Lock()
+		defer raft.requestVotesMu.Unlock()
 		//raft.resetStepDownDeadline()
 		var requestVoteResMsgBody structs.RequestVoteResMsgBody
 		if err := json.Unmarshal(msg.Body, &requestVoteResMsgBody); err != nil {
@@ -197,31 +205,33 @@ func (raft *RaftNode) requestVotes() {
 	)
 }
 
-func (raft *RaftNode) becomeFollower() {
-	raft.mu.Lock()
-	defer raft.mu.Unlock()
-
-	raft.state = StateFollower
-	//raft.nextIndex = map[string]int{}
-	//raft.matchIndex = map[string]int{}
-	//raft.leaderId = ""
-	raft.resetElectionDeadline()
-	log.Println("Became follower for term", raft.currentTerm)
-}
+//func (raft *RaftNode) becomeFollower() {
+//	raft.mu.Lock()
+//	defer raft.mu.Unlock()
+//
+//	raft.state = StateFollower
+//	//raft.nextIndex = map[string]int{}
+//	//raft.matchIndex = map[string]int{}
+//	//raft.leaderId = ""
+//	raft.resetElectionDeadline()
+//	log.Println("Became follower for term", raft.currentTerm)
+//}
 
 func (raft *RaftNode) becomeCandidate() {
 	raft.becomeCandidateMu.Lock()
 	defer raft.becomeCandidateMu.Unlock()
-	if raft.electionDeadline < time.Now().Unix() {
-		raft.state = StateCandidate
-		raft.advanceTerm(raft.currentTerm + 1)
-		raft.votedFor = raft.node.ID()
-		//raft.leaderId = ""
-		raft.resetElectionDeadline()
-		//raft.resetStepDownDeadline()
-		log.Println("Became candidate for term", raft.currentTerm)
-		raft.requestVotes()
-	}
+	log.Println("becomeCandidate acquired lock")
+	//if raft.electionDeadline < time.Now().Unix() {
+	raft.state = StateCandidate
+	raft.advanceTerm(raft.currentTerm + 1)
+	raft.votedFor = raft.node.ID()
+	//raft.leaderId = ""
+	raft.resetElectionDeadline()
+	//raft.resetStepDownDeadline()
+	log.Println("Became candidate for term", raft.currentTerm)
+	raft.requestVotes()
+	log.Println("becomeCandidate release Lock")
+	//}
 }
 
 //	func (raft *RaftNode) becomeLeader() error {
@@ -253,21 +263,21 @@ func (raft *RaftNode) becomeCandidate() {
 //		}
 //		return false, nil
 //	}
-func (raft *RaftNode) election() error {
-	//time.Sleep(time.Duration(rand.Int31n(10)) * time.Millisecond)
-	raft.mu.Lock()
-	defer raft.mu.Unlock()
-	// If it's been long enough, trigger a leader election.
-	if raft.electionDeadline < time.Now().Unix() {
-		if (raft.state == StateFollower) || (raft.state == StateCandidate) {
-			raft.becomeCandidate()
-		} else {
-			raft.resetElectionDeadline()
-		}
-	}
-
-	return nil
-}
+//func (raft *RaftNode) election() error {
+//	time.Sleep(time.Duration(rand.Int31n(10)) * time.Millisecond)
+//	raft.mu.Lock()
+//	defer raft.mu.Unlock()
+//	// If it's been long enough, trigger a leader election.
+//	if raft.electionDeadline < time.Now().Unix() {
+//		if raft.state != StateLeader {
+//			raft.becomeCandidate()
+//		} else {
+//			raft.resetElectionDeadline()
+//		}
+//	}
+//
+//	return nil
+//}
 
 //
 //func (raft *RaftNode) advanceCommitIndex() (bool, error) {
@@ -355,18 +365,34 @@ func newRaftNode() (*RaftNode, error) {
 		return nil, err
 	}
 
-	becomeCandidateTicker := time.NewTicker(2 * time.Second)
-	//electionTicker := time.NewTicker(100 * time.Millisecond)
+	becomeCandidateTicker := time.NewTicker(100 * time.Millisecond)
 	go func() {
 		for {
 			select {
 			case <-becomeCandidateTicker.C:
-				raft.becomeCandidate()
-				//case <-electionTicker.C:
-				//raft.election()
+				r := rand.Int63n(100)
+				//log.Printf("rand.Int63n(100) %v\n", r)
+				time.Sleep(time.Duration(r) * time.Millisecond)
+				if raft.electionDeadline < time.Now().Unix() {
+					if raft.state != StateLeader {
+						raft.becomeCandidate()
+					} else {
+						raft.resetElectionDeadline()
+					}
+				}
 			}
 		}
 	}()
+
+	//electionTicker := time.NewTicker(100 * time.Millisecond)
+	//go func() {
+	//	for {
+	//		select {
+	//		case <-electionTicker.C:
+	//			raft.election()
+	//		}
+	//	}
+	//}()
 
 	return &raft, nil
 }
