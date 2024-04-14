@@ -129,10 +129,10 @@ func (raft *RaftNode) advanceTerm(term int) {
 	}
 
 	raft.currentTerm = term
-	//raft.votedFor = ""
+	raft.votedFor = ""
 }
 
-func (raft *RaftNode) maybeStepDown(remoteTerm int) error {
+func (raft *RaftNode) maybeStepDown(remoteTerm int) {
 	raft.mu.Lock()
 	defer raft.mu.Unlock()
 	// If remoteTerm is bigger than ours, advance our term and become a follower.
@@ -141,7 +141,6 @@ func (raft *RaftNode) maybeStepDown(remoteTerm int) error {
 		raft.advanceTerm(remoteTerm)
 		raft.becomeFollower()
 	}
-	return nil
 }
 
 func (raft *RaftNode) requestVotes() {
@@ -164,9 +163,7 @@ func (raft *RaftNode) requestVotes() {
 			panic(err)
 		}
 
-		if err := raft.maybeStepDown(requestVoteResMsgBody.Term); err != nil {
-			return err
-		}
+		raft.maybeStepDown(requestVoteResMsgBody.Term)
 
 		if raft.state == StateCandidate &&
 			raft.currentTerm == term &&
@@ -212,20 +209,19 @@ func (raft *RaftNode) becomeFollower() {
 	log.Println("Became follower for term", raft.currentTerm)
 }
 
-func (raft *RaftNode) becomeCandidate() error {
+func (raft *RaftNode) becomeCandidate() {
 	raft.becomeCandidateMu.Lock()
 	defer raft.becomeCandidateMu.Unlock()
 	if raft.electionDeadline < time.Now().Unix() {
 		raft.state = StateCandidate
 		raft.advanceTerm(raft.currentTerm + 1)
-		//raft.votedFor = raft.nodeId
+		raft.votedFor = raft.node.ID()
 		//raft.leaderId = ""
 		raft.resetElectionDeadline()
 		//raft.resetStepDownDeadline()
 		log.Println("Became candidate for term", raft.currentTerm)
 		raft.requestVotes()
 	}
-	return nil
 }
 
 //	func (raft *RaftNode) becomeLeader() error {
@@ -258,12 +254,13 @@ func (raft *RaftNode) becomeCandidate() error {
 //		return false, nil
 //	}
 func (raft *RaftNode) election() error {
+	//time.Sleep(time.Duration(rand.Int31n(10)) * time.Millisecond)
 	raft.mu.Lock()
 	defer raft.mu.Unlock()
 	// If it's been long enough, trigger a leader election.
 	if raft.electionDeadline < time.Now().Unix() {
 		if (raft.state == StateFollower) || (raft.state == StateCandidate) {
-			return raft.becomeCandidate()
+			raft.becomeCandidate()
 		} else {
 			raft.resetElectionDeadline()
 		}
@@ -359,12 +356,14 @@ func newRaftNode() (*RaftNode, error) {
 	}
 
 	becomeCandidateTicker := time.NewTicker(2 * time.Second)
+	//electionTicker := time.NewTicker(100 * time.Millisecond)
 	go func() {
 		for {
 			select {
 			case <-becomeCandidateTicker.C:
-
 				raft.becomeCandidate()
+				//case <-electionTicker.C:
+				//raft.election()
 			}
 		}
 	}()

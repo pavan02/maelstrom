@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 	"github.com/pavan/maelstrom/demo/go/cmd/maelstrom-raft/structs"
+	"log"
 )
 
 // Handle initialization message
@@ -21,36 +22,39 @@ import (
 //	return nil
 //}
 
-//// When a node requests our vote...
-//func (raft *RaftNode) requestVote(msg Msg) error {
-//	if err := raft.maybeStepDown(msg.Body.Term); err != nil {
-//		return err
-//	}
-//	grant := false
-//
-//	if msg.Body.Term < raft.currentTerm {
-//		log.Printf("candidate Term %d lower than %d not granting vote \n", msg.Body.Term, raft.currentTerm)
-//	} else if raft.votedFor != "" {
-//		log.Printf("already voted for %s not granting vote \n", raft.votedFor)
-//	} else if msg.Body.LastLogTerm < raft.log.lastTerm() {
-//		log.Printf("have log Entries From Term %d which is newer than remote Term %d not granting vote\n", raft.log.lastTerm(), msg.Body.LastLogTerm)
-//	} else if msg.Body.LastLogTerm == raft.log.lastTerm() && msg.Body.LastLogIndex < raft.log.size() {
-//		log.Printf("our logs are both at Term %d but our log is %d and theirs is only %d \n", raft.log.lastTerm(), raft.log.size(), msg.Body.LastLogIndex)
-//	} else {
-//		log.Printf("Granting vote To %s\n", msg.Src)
-//		grant = true
-//		raft.votedFor = msg.Body.CandidateId
-//		raft.resetElectionDeadline()
-//	}
-//
-//	raft.net.reply(msg, map[string]interface{}{
-//		"type":         requestVoteResultMsgType,
-//		"term":         raft.currentTerm,
-//		"vote_granted": grant,
-//	})
-//
-//	return nil
-//}
+// When a node requests our vote...
+func (raft *RaftNode) requestVote(msg maelstrom.Message) error {
+	var requestVoteMsgBody structs.RequestVoteMsgBody
+	if err := json.Unmarshal(msg.Body, &requestVoteMsgBody); err != nil {
+		return err
+	}
+
+	raft.maybeStepDown(requestVoteMsgBody.Term)
+	grant := false
+
+	if requestVoteMsgBody.Term < raft.currentTerm {
+		log.Printf("candidate Term %d lower than %d not granting vote \n", requestVoteMsgBody.Term, raft.currentTerm)
+	} else if raft.votedFor != "" {
+		log.Printf("already voted for %s not granting vote \n", raft.votedFor)
+	} else if requestVoteMsgBody.LastLogTerm < raft.log.lastTerm() {
+		log.Printf("have log Entries From Term %d which is newer than remote Term %d not granting vote\n", raft.log.lastTerm(), requestVoteMsgBody.LastLogTerm)
+	} else if requestVoteMsgBody.LastLogTerm == raft.log.lastTerm() && requestVoteMsgBody.LastLogIndex < raft.log.size() {
+		log.Printf("our logs are both at Term %d but our log is %d and theirs is only %d \n", raft.log.lastTerm(), raft.log.size(), requestVoteMsgBody.LastLogIndex)
+	} else {
+		log.Printf("Granting vote To %s\n", msg.Src)
+		grant = true
+		raft.votedFor = requestVoteMsgBody.CandidateId
+		raft.resetElectionDeadline()
+	}
+
+	raft.node.Reply(msg, map[string]interface{}{
+		"type":         structs.MsgTypeRequestVoteResult,
+		"term":         raft.currentTerm,
+		"vote_granted": grant,
+	})
+
+	return nil
+}
 
 //func (raft *RaftNode) appendEntries(msg Msg) error {
 //	log.Println("begin func appendEntries", msg)
@@ -164,5 +168,6 @@ func (raft *RaftNode) setupHandlers() error {
 	raft.node.Handle(string(structs.MsgTypeRead), kvReadRequest)
 	raft.node.Handle(string(structs.MsgTypeWrite), kvWriteRequest)
 	raft.node.Handle(string(structs.MsgTypeCas), kvCasRequest)
+	raft.node.Handle(string(structs.MsgTypeRequestVote), raft.requestVote)
 	return nil
 }
