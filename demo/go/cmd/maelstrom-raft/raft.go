@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
+	"github.com/pavan/maelstrom/demo/go/cmd/maelstrom-raft/structs"
+	"github.com/samber/lo"
 	"golang.org/x/exp/rand"
 	"log"
 	"sync"
@@ -44,6 +47,9 @@ type RaftNode struct {
 	log          *Log
 	node         *maelstrom.Node
 	stateMachine *KVStore
+
+	// Concurrency Locks
+	mu sync.Mutex
 }
 
 func (raft *RaftNode) init() error {
@@ -82,13 +88,13 @@ func (raft *RaftNode) init() error {
 	return nil
 }
 
-//	func (raft *RaftNode) otherNodes() []string {
-//		// All nodes except this one
-//		return lo.Filter(raft.nodeIds, func(nodeId string, _ int) bool {
-//			return nodeId != raft.nodeId
-//		})
-//	}
-//
+func (raft *RaftNode) otherNodes() []string {
+	// All nodes except this one
+	return lo.Filter(raft.nodeIds, func(nodeId string, _ int) bool {
+		return nodeId != raft.nodeId
+	})
+}
+
 //	func (raft *RaftNode) getMatchIndex() map[string]int {
 //		// Returns the map of match indices, including an entry for ourselves, based on our log size.
 //		clonedMap := maps.Clone(raft.matchIndex)
@@ -100,17 +106,17 @@ func (raft *RaftNode) init() error {
 //		raft.nodeId = id
 //		raft.node.setNodeId(id)
 //	}
-//
-//	func (raft *RaftNode) brpc(body map[string]interface{}, handler MsgHandler) {
-//		// Broadcast an RPC message To all other nodes, and call handler with each response.
-//		for _, nodeId := range raft.otherNodes() {
-//			raft.node.rpc(nodeId, body, handler)
-//		}
-//	}
+
+func (raft *RaftNode) brpc(body map[string]interface{}, handler maelstrom.HandlerFunc) {
+	// Broadcast an RPC message To all other nodes, and call handler with each response.
+	for _, nodeId := range raft.otherNodes() {
+		raft.node.RPC(nodeId, body, handler)
+	}
+}
+
 func (raft *RaftNode) resetElectionDeadline() {
-	var mu sync.Mutex
-	mu.Lock()
-	defer mu.Unlock()
+	raft.mu.Lock()
+	defer raft.mu.Unlock()
 	temp := int64(float64(raft.electionTimeout) * (rand.Float64() + 1.0))
 	raft.electionDeadline = time.Now().Unix() + temp
 }
@@ -120,9 +126,8 @@ func (raft *RaftNode) resetElectionDeadline() {
 //		raft.stepDownDeadline = time.Now().Unix() + raft.electionTimeout
 //	}
 func (raft *RaftNode) advanceTerm(term int) {
-	var mu sync.Mutex
-	mu.Lock()
-	defer mu.Unlock()
+	raft.mu.Lock()
+	defer raft.mu.Unlock()
 	// Advance our Term To `Term`, resetting who we voted for.
 	if raft.currentTerm >= term {
 		panic(fmt.Errorf("Can't go backwards"))
@@ -132,83 +137,89 @@ func (raft *RaftNode) advanceTerm(term int) {
 	//raft.votedFor = ""
 }
 
-//	func (raft *RaftNode) maybeStepDown(remoteTerm int) error {
-//		// If remoteTerm is bigger than ours, advance our Term and become a follower.
-//		if raft.currentTerm < remoteTerm {
-//			log.Printf("Stepping down: remote Term %d higher than our Term %d", remoteTerm, raft.currentTerm)
-//			if err := raft.advanceTerm(remoteTerm); err != nil {
-//				return err
-//			}
-//			raft.becomeFollower()
-//		}
-//		return nil
-//	}
-//
-//	func (raft *RaftNode) requestVotes() error {
-//		// Request that other nodes vote for us as a leader
-//
-//		votes := map[string]bool{}
-//		term := raft.currentTerm
-//
-//		// We vote for our-self
-//		votes[raft.nodeId] = true
-//
-//		handler := func(res Msg) error {
-//			raft.resetStepDownDeadline()
-//			body := res.Body
-//			if err := raft.maybeStepDown(body.Term); err != nil {
-//				return err
-//			}
-//
-//			if raft.state == StateCandidate &&
-//				raft.currentTerm == term &&
-//				body.Term == raft.currentTerm &&
-//				body.VotedGranted {
-//
-//				// We have a vote for our candidacy
-//				votes[res.Src] = true
-//				log.Println("have votes " + fmt.Sprint(votes))
-//
-//				if majority(len(raft.nodeIds)) <= len(votes) {
-//					// We have a majority of votes for this Term
-//					if err := raft.becomeLeader(); err != nil {
-//						return err
-//					}
-//				}
-//			}
-//			return nil
-//		}
-//
-//		// Broadcast vote request
-//		raft.brpc(
-//			map[string]interface{}{
-//				"type":           requestVoteMsgType,
-//				"term":           raft.currentTerm,
-//				"candidate":      raft.nodeId,
-//				"last_log_index": raft.log.size(),
-//				"last_log_term":  raft.log.lastTerm(),
-//			},
-//			handler,
-//		)
-//		return nil
-//	}
+func (raft *RaftNode) maybeStepDown(remoteTerm int) error {
+	raft.mu.Lock()
+	defer raft.mu.Unlock()
+	// If remoteTerm is bigger than ours, advance our term and become a follower.
+	if raft.currentTerm < remoteTerm {
+		log.Printf("Stepping down: remote term %d higher than our term %d", remoteTerm, raft.currentTerm)
+		raft.advanceTerm(remoteTerm)
+		raft.becomeFollower()
+	}
+	return nil
+}
+
+func (raft *RaftNode) requestVotes() {
+	raft.mu.Lock()
+	defer raft.mu.Unlock()
+	// Request that other nodes vote for us as a leader
+
+	votes := map[string]bool{}
+	term := raft.currentTerm
+
+	// We vote for our-self
+	votes[raft.nodeId] = true
+
+	handler := func(msg maelstrom.Message) error {
+		raft.mu.Lock()
+		defer raft.mu.Unlock()
+		//raft.resetStepDownDeadline()
+		var requestVoteResMsgBody structs.RequestVoteResMsgBody
+		if err := json.Unmarshal(msg.Body, &requestVoteResMsgBody); err != nil {
+			panic(err)
+		}
+
+		if err := raft.maybeStepDown(requestVoteResMsgBody.Term); err != nil {
+			return err
+		}
+
+		if raft.state == StateCandidate &&
+			raft.currentTerm == term &&
+			requestVoteResMsgBody.Term == raft.currentTerm &&
+			requestVoteResMsgBody.VotedGranted {
+
+			// We have a vote for our candidacy
+			votes[msg.Src] = true
+			log.Println("have votes " + fmt.Sprint(votes))
+
+			//if majority(len(raft.nodeIds)) <= len(votes) {
+			//	// We have a majority of votes for this Term
+			//	if err := raft.becomeLeader(); err != nil {
+			//		return err
+			//	}
+			//}
+		}
+		return nil
+	}
+
+	// Broadcast vote request
+	raft.brpc(
+		map[string]interface{}{
+			"type":           structs.MsgTypeRequestVote,
+			"term":           raft.currentTerm,
+			"candidate":      raft.nodeId,
+			"last_log_index": raft.log.size(),
+			"last_log_term":  raft.log.lastTerm(),
+		},
+		handler,
+	)
+}
+
 func (raft *RaftNode) becomeFollower() {
-	var mu sync.Mutex
-	mu.Lock()
-	defer mu.Unlock()
+	raft.mu.Lock()
+	defer raft.mu.Unlock()
 
 	raft.state = StateFollower
 	//raft.nextIndex = map[string]int{}
 	//raft.matchIndex = map[string]int{}
 	//raft.leaderId = ""
 	raft.resetElectionDeadline()
-	log.Println("Became follower for Term", raft.currentTerm)
+	log.Println("Became follower for term", raft.currentTerm)
 }
 
 func (raft *RaftNode) becomeCandidate() error {
-	var mu sync.Mutex
-	mu.Lock()
-	defer mu.Unlock()
+	raft.mu.Lock()
+	defer raft.mu.Unlock()
 	if raft.electionDeadline < time.Now().Unix() {
 		raft.state = StateCandidate
 		raft.advanceTerm(raft.currentTerm + 1)
@@ -216,10 +227,8 @@ func (raft *RaftNode) becomeCandidate() error {
 		//raft.leaderId = ""
 		raft.resetElectionDeadline()
 		//raft.resetStepDownDeadline()
-		log.Println("Became candidate for Term", raft.currentTerm)
-		//if err := raft.requestVotes(); err != nil {
-		//	return err
-		//}
+		log.Println("Became candidate for term", raft.currentTerm)
+		raft.requestVotes()
 	}
 	return nil
 }
@@ -254,9 +263,8 @@ func (raft *RaftNode) becomeCandidate() error {
 //		return false, nil
 //	}
 func (raft *RaftNode) election() error {
-	var mu sync.Mutex
-	mu.Lock()
-	defer mu.Unlock()
+	raft.mu.Lock()
+	defer raft.mu.Unlock()
 	// If it's been long enough, trigger a leader election.
 	if raft.electionDeadline < time.Now().Unix() {
 		if (raft.state == StateFollower) || (raft.state == StateCandidate) {
