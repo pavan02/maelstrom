@@ -390,18 +390,18 @@ func newRaftNode() (*RaftNode, error) {
 		}
 	}()
 
-	//leaderStepDownTicker := time.NewTicker(100 * time.Millisecond)
-	//go func() {
-	//	for {
-	//		select {
-	//		case <-leaderStepDownTicker.C:
-	//			if raft.state == StateLeader && raft.stepDownDeadline < time.Now().UnixNano() {
-	//				log.Println("Stepping down: haven't received any acks recently")
-	//				raft.becomeFollower()
-	//			}
-	//		}
-	//	}
-	//}()
+	leaderStepDownTicker := time.NewTicker(100 * time.Millisecond)
+	go func() {
+		for {
+			select {
+			case <-leaderStepDownTicker.C:
+				if raft.state == StateLeader && raft.stepDownDeadline < time.Now().UnixNano() {
+					log.Println("Stepping down: haven't received any acks recently")
+					raft.becomeFollower()
+				}
+			}
+		}
+	}()
 
 	return &raft, nil
 }
