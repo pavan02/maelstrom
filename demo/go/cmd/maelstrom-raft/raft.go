@@ -20,7 +20,7 @@ const (
 )
 
 type RaftNode struct {
-	electionTimeout        int64
+	electionTimeout        time.Duration
 	heartbeatInterval      float64
 	minReplicationInterval float64
 	electionDeadline       int64
@@ -57,10 +57,10 @@ type RaftNode struct {
 
 func (raft *RaftNode) init() error {
 	// Heartbeats & timeouts
-	raft.electionTimeout = 2                      // Time before election, in seconds
+	raft.electionTimeout = 2 * time.Second        // Time before election, in seconds
 	raft.heartbeatInterval = 1                    // Time between heartbeats, in seconds
 	raft.minReplicationInterval = 0.05            // Don't replicate TOO frequently
-	raft.electionDeadline = 0                     // Next election, in epoch seconds
+	raft.electionDeadline = time.Now().UnixNano() // Next election, in epoch seconds
 	raft.stepDownDeadline = time.Now().UnixNano() // When To step down automatically
 	//raft.lastReplication = 0           // Last replication, in epoch seconds
 
@@ -119,15 +119,16 @@ func (raft *RaftNode) brpc(body map[string]interface{}, handler maelstrom.Handle
 func (raft *RaftNode) resetElectionDeadline() {
 	raft.resetElectionDeadlineMu.Lock()
 	defer raft.resetElectionDeadlineMu.Unlock()
-	temp := int64(float64(raft.electionTimeout) * (rand.Float64() + 1.0))
+	temp := time.Duration(rand.Float64()+1.0) * time.Second
 	log.Printf("resetElectionDeadline by seconds %d\n", temp)
-	raft.electionDeadline = time.Now().Unix() + temp
+	raft.electionDeadline = time.Now().UnixNano() + (temp + raft.electionTimeout).Nanoseconds()
 }
 
-//	func (raft *RaftNode) resetStepDownDeadline() {
-//		// Don't step down for a while.
-//		raft.stepDownDeadline = time.Now().Unix() + raft.electionTimeout
-//	}
+func (raft *RaftNode) resetStepDownDeadline() {
+	// Don't step down for a while.
+	raft.stepDownDeadline = time.Now().UnixNano() + (raft.electionTimeout).Nanoseconds()
+}
+
 func (raft *RaftNode) advanceTerm(term int) {
 	raft.advanceTermMu.Lock()
 	defer raft.advanceTermMu.Unlock()
@@ -149,7 +150,7 @@ func (raft *RaftNode) maybeStepDown(remoteTerm int) {
 	if raft.currentTerm < remoteTerm {
 		log.Printf("Stepping down: remote term %d higher than our term %d", remoteTerm, raft.currentTerm)
 		raft.advanceTerm(remoteTerm)
-		//raft.becomeFollower()
+		raft.becomeFollower()
 	}
 }
 
@@ -167,7 +168,7 @@ func (raft *RaftNode) requestVotes() {
 	handler := func(msg maelstrom.Message) error {
 		raft.requestVotesMu.Lock()
 		defer raft.requestVotesMu.Unlock()
-		//raft.resetStepDownDeadline()
+		raft.resetStepDownDeadline()
 		var requestVoteResMsgBody structs.RequestVoteResMsgBody
 		if err := json.Unmarshal(msg.Body, &requestVoteResMsgBody); err != nil {
 			panic(err)
@@ -222,24 +223,12 @@ func (raft *RaftNode) becomeLeader() error {
 	//	raft.nextIndex[nodeId] = raft.log.size() + 1
 	//	raft.matchIndex[nodeId] = 0
 	//}
-	//raft.resetStepDownDeadline()
+	raft.resetStepDownDeadline()
 	log.Println("Became leader for term", raft.currentTerm)
 	//log.Println("nextIndex:" + fmt.Sprint(raft.nextIndex))
 	//log.Println("otherNodes:" + fmt.Sprint(raft.otherNodes()))
 	return nil
 }
-
-//func (raft *RaftNode) becomeFollower() {
-//	raft.mu.Lock()
-//	defer raft.mu.Unlock()
-//
-//	raft.state = StateFollower
-//	//raft.nextIndex = map[string]int{}
-//	//raft.matchIndex = map[string]int{}
-//	//raft.leaderId = ""
-//	raft.resetElectionDeadline()
-//	log.Println("Became follower for term", raft.currentTerm)
-//}
 
 func (raft *RaftNode) becomeCandidate() {
 	raft.becomeCandidateMu.Lock()
@@ -251,11 +240,23 @@ func (raft *RaftNode) becomeCandidate() {
 	raft.votedFor = raft.node.ID()
 	//raft.leaderId = ""
 	raft.resetElectionDeadline()
-	//raft.resetStepDownDeadline()
+	raft.resetStepDownDeadline()
 	log.Println("Became candidate for term", raft.currentTerm)
 	raft.requestVotes()
 	log.Println("becomeCandidate release Lock")
 	//}
+}
+
+func (raft *RaftNode) becomeFollower() {
+	raft.becomeFollowerMu.Lock()
+	defer raft.becomeFollowerMu.Unlock()
+
+	raft.state = StateFollower
+	//raft.nextIndex = map[string]int{}
+	//raft.matchIndex = map[string]int{}
+	//raft.leaderId = ""
+	raft.resetElectionDeadline()
+	log.Println("Became follower for term", raft.currentTerm)
 }
 
 //
@@ -378,7 +379,7 @@ func newRaftNode() (*RaftNode, error) {
 				r := rand.Int63n(100)
 				//log.Printf("rand.Int63n(100) %v\n", r)
 				time.Sleep(time.Duration(r) * time.Millisecond)
-				if raft.electionDeadline < time.Now().Unix() {
+				if raft.electionDeadline < time.Now().UnixNano() {
 					if raft.state != StateLeader {
 						raft.becomeCandidate()
 					} else {
@@ -389,12 +390,15 @@ func newRaftNode() (*RaftNode, error) {
 		}
 	}()
 
-	//electionTicker := time.NewTicker(100 * time.Millisecond)
+	//leaderStepDownTicker := time.NewTicker(100 * time.Millisecond)
 	//go func() {
 	//	for {
 	//		select {
-	//		case <-electionTicker.C:
-	//			raft.election()
+	//		case <-leaderStepDownTicker.C:
+	//			if raft.state == StateLeader && raft.stepDownDeadline < time.Now().UnixNano() {
+	//				log.Println("Stepping down: haven't received any acks recently")
+	//				raft.becomeFollower()
+	//			}
 	//		}
 	//	}
 	//}()
