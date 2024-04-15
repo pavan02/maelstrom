@@ -10,8 +10,8 @@ import (
 
 // When a node requests our vote...
 func (raft *RaftNode) requestVote(msg maelstrom.Message) error {
-	raft.mu.Lock()
-	defer raft.mu.Unlock()
+	raft.requestVoteHandlerMu.Lock()
+	defer raft.requestVoteHandlerMu.Unlock()
 	var requestVoteMsgBody structs.RequestVoteMsgBody
 	if err := json.Unmarshal(msg.Body, &requestVoteMsgBody); err != nil {
 		return err
@@ -51,8 +51,8 @@ func (raft *RaftNode) requestVote(msg maelstrom.Message) error {
 }
 
 func (raft *RaftNode) appendEntries(msg maelstrom.Message) error {
-	raft.mu.Lock()
-	defer raft.mu.Unlock()
+	raft.appendEntriesHandlerMu.Lock()
+	defer raft.appendEntriesHandlerMu.Unlock()
 
 	log.Println("begin func appendEntries", msg)
 	var appendEntriesMsgBody structs.AppendEntriesMsgBody
@@ -111,8 +111,8 @@ func (raft *RaftNode) appendEntries(msg maelstrom.Message) error {
 func (raft *RaftNode) setupHandlers() error {
 	// Handle Client KV requests
 	kvRequests := func(msg maelstrom.Message, op structs.Operation) error {
-		raft.mu.Lock()
-		defer raft.mu.Unlock()
+		raft.kvRequestsMu.Lock()
+		defer raft.kvRequestsMu.Unlock()
 
 		if raft.state != StateLeader {
 			raft.node.Reply(msg, &structs.ErrorMsgBody{

@@ -10,8 +10,8 @@ import (
 )
 
 func (raft *RaftNode) replicateLog() error {
-	raft.mu.Lock()
-	defer raft.mu.Unlock()
+	raft.replicateLogMu.Lock()
+	defer raft.replicateLogMu.Unlock()
 	// If we're the leader, replicate unacknowledged log entries to followers. Also serves as a heartbeat.
 
 	// How long has it been since we replicated?
@@ -21,6 +21,8 @@ func (raft *RaftNode) replicateLog() error {
 	// We'll need this to make sure we process responses in *this* term
 	term := raft.currentTerm
 
+	raft.leaderStateMu.Lock()
+	defer raft.leaderStateMu.Unlock()
 	log.Printf("replicateLog: check if we are leader: %v\n", raft.state)
 	if raft.state == StateLeader && raft.minReplicationInterval < elapsedTime {
 		log.Printf("replicateLog: we are leader: %v\n", raft.state)
@@ -43,8 +45,8 @@ func (raft *RaftNode) replicateLog() error {
 				_nodeId := nodeId
 
 				appendEntriesResHandler := func(res maelstrom.Message) error {
-					raft.mu.Lock()
-					defer raft.mu.Unlock()
+					raft.appendEntriesResMu.Lock()
+					defer raft.appendEntriesResMu.Unlock()
 
 					log.Println("start appendEntriesResHandler")
 					var appendEntriesResMsgBody structs.AppendEntriesResMsgBody

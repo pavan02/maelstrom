@@ -53,6 +53,7 @@ type RaftNode struct {
 	advanceTermMu           sync.Mutex
 	resetElectionDeadlineMu sync.Mutex
 	requestVotesMu          sync.Mutex
+	requestVoteResHandlerMu sync.Mutex
 	requestVoteHandlerMu    sync.Mutex
 	appendEntriesHandlerMu  sync.Mutex
 	maybeStepDownMu         sync.Mutex
@@ -60,6 +61,10 @@ type RaftNode struct {
 	kvRequestsMu            sync.Mutex
 	replicateLogMu          sync.Mutex
 	appendEntriesResMu      sync.Mutex
+	resetStepDownDeadlineMu sync.Mutex
+
+	leaderStateMu sync.Mutex
+	//raftStateMu   sync.Mutex
 }
 
 func (raft *RaftNode) init() error {
@@ -126,21 +131,23 @@ func (raft *RaftNode) brpc(body map[string]interface{}, handler maelstrom.Handle
 }
 
 func (raft *RaftNode) resetElectionDeadline() {
-	raft.mu.Lock()
-	defer raft.mu.Unlock()
+	raft.resetElectionDeadlineMu.Lock()
+	defer raft.resetElectionDeadlineMu.Unlock()
 	temp := time.Duration(rand.Float64()+1.0) * time.Second
 	log.Printf("resetElectionDeadline by seconds %d\n", temp)
 	raft.electionDeadline = time.Now().UnixNano() + (temp + raft.electionTimeout).Nanoseconds()
 }
 
 func (raft *RaftNode) resetStepDownDeadline() {
+	raft.resetStepDownDeadlineMu.Lock()
+	defer raft.resetStepDownDeadlineMu.Unlock()
 	// Don't step down for a while.
 	raft.stepDownDeadline = time.Now().UnixNano() + (raft.electionTimeout).Nanoseconds()
 }
 
 func (raft *RaftNode) advanceTerm(term int) {
-	raft.mu.Lock()
-	defer raft.mu.Unlock()
+	raft.advanceTermMu.Lock()
+	defer raft.advanceTermMu.Unlock()
 	log.Println("advanceTerm acquired lock")
 	// Advance our Term To `Term`, resetting who we voted for.
 	if raft.currentTerm >= term {
@@ -153,8 +160,8 @@ func (raft *RaftNode) advanceTerm(term int) {
 }
 
 func (raft *RaftNode) maybeStepDown(remoteTerm int) {
-	raft.mu.Lock()
-	defer raft.mu.Unlock()
+	raft.maybeStepDownMu.Lock()
+	defer raft.maybeStepDownMu.Unlock()
 	// If remoteTerm is bigger than ours, advance our term and become a follower.
 	if raft.currentTerm < remoteTerm {
 		log.Printf("Stepping down: remote term %d higher than our term %d", remoteTerm, raft.currentTerm)
@@ -164,8 +171,8 @@ func (raft *RaftNode) maybeStepDown(remoteTerm int) {
 }
 
 func (raft *RaftNode) requestVotes() {
-	raft.mu.Lock()
-	defer raft.mu.Unlock()
+	raft.requestVotesMu.Lock()
+	defer raft.requestVotesMu.Unlock()
 	// Request that other nodes vote for us as a leader
 
 	votes := map[string]bool{}
@@ -175,8 +182,8 @@ func (raft *RaftNode) requestVotes() {
 	votes[raft.node.ID()] = true
 
 	handler := func(msg maelstrom.Message) error {
-		raft.mu.Lock()
-		defer raft.mu.Unlock()
+		raft.requestVoteResHandlerMu.Lock()
+		defer raft.requestVoteResHandlerMu.Unlock()
 		raft.resetStepDownDeadline()
 		var requestVoteResMsgBody structs.RequestVoteResMsgBody
 		if err := json.Unmarshal(msg.Body, &requestVoteResMsgBody); err != nil {
@@ -218,8 +225,8 @@ func (raft *RaftNode) requestVotes() {
 }
 
 func (raft *RaftNode) becomeLeader() error {
-	raft.mu.Lock()
-	defer raft.mu.Unlock()
+	raft.becomeLeaderMu.Lock()
+	defer raft.becomeLeaderMu.Unlock()
 	if raft.state != StateCandidate {
 		return fmt.Errorf("should be a candidate")
 	}
@@ -243,8 +250,8 @@ func (raft *RaftNode) becomeLeader() error {
 }
 
 func (raft *RaftNode) becomeCandidate() {
-	raft.mu.Lock()
-	defer raft.mu.Unlock()
+	raft.becomeCandidateMu.Lock()
+	defer raft.becomeCandidateMu.Unlock()
 	log.Println("becomeCandidate acquired lock")
 	//if raft.electionDeadline < time.Now().Unix() {
 	raft.state = StateCandidate
@@ -260,8 +267,11 @@ func (raft *RaftNode) becomeCandidate() {
 }
 
 func (raft *RaftNode) becomeFollower() {
-	raft.mu.Lock()
-	defer raft.mu.Unlock()
+	raft.becomeFollowerMu.Lock()
+	defer raft.becomeFollowerMu.Unlock()
+
+	raft.leaderStateMu.Lock()
+	defer raft.leaderStateMu.Unlock()
 
 	raft.state = StateFollower
 	raft.nextIndex = nil
