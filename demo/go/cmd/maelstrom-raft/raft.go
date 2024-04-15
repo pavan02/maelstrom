@@ -86,8 +86,8 @@ func (raft *RaftNode) init() error {
 	raft.nextIndex = map[string]int{}
 	raft.matchIndex = map[string]int{}
 	raft.commitIndex = 0
-	//raft.lastApplied = 1 // index: 0 -> Op: None
-	raft.leaderId = "" // Who do we think the leader is?
+	raft.leaderId = ""   // Who do we think the leader is?
+	raft.lastApplied = 1 // index: 0 -> Op: None
 
 	// Components
 	raft.log = newLog()
@@ -314,24 +314,25 @@ func (raft *RaftNode) advanceCommitIndex() {
 			raft.commitIndex = n
 		}
 	}
+	raft.advanceStateMachine()
 }
 
-//
-//func (raft *RaftNode) advanceStateMachine() (bool, error) {
-//	// If we have un-applied committed Entries in the log, apply one To the state machine.
-//	//log.Printf("advanceStateMachine -> lastApplied %d, commitIndex %d", raft.lastApplied, raft.commitIndex)
-//	if raft.lastApplied < raft.commitIndex {
-//		// Advance the applied index and apply that Op
-//		raft.lastApplied += 1
-//		response := raft.stateMachine.apply(raft.log.get(raft.lastApplied).Op)
-//		if raft.state == StateLeader {
-//			// We were the leader, let's respond To the Client.
-//			raft.node.send(response.Dest, response.Body)
-//		}
-//	}
-//	return true, nil
-//}
-//
+func (raft *RaftNode) advanceStateMachine() {
+	// If we have un-applied committed Entries in the log, apply one to the state machine.
+	for raft.lastApplied < raft.commitIndex {
+		// Advance the applied index and apply that Op
+		raft.lastApplied += 1
+		entry := raft.log.get(raft.lastApplied)
+		response := raft.stateMachine.apply(*entry.Op)
+		if raft.state == StateLeader {
+			// We were the leader, let's respond To the Client.
+			if err := raft.node.Reply(entry.Msg, response); err != nil {
+				panic(err)
+			}
+		}
+	}
+}
+
 //func (raft *RaftNode) main() {
 //	log.Println("Online.")
 //

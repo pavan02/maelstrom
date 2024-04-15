@@ -99,6 +99,7 @@ func (raft *RaftNode) appendEntries(msg maelstrom.Message) error {
 	// Advance commit pointer
 	if raft.commitIndex < appendEntriesMsgBody.LeaderCommit {
 		raft.commitIndex = min(appendEntriesMsgBody.LeaderCommit, raft.log.size())
+		raft.advanceCommitIndex()
 	}
 
 	// Acknowledge
@@ -110,18 +111,19 @@ func (raft *RaftNode) appendEntries(msg maelstrom.Message) error {
 func (raft *RaftNode) setupHandlers() error {
 	// Handle Client KV requests
 	kvRequests := func(msg maelstrom.Message, op structs.Operation) error {
-		raft.kvRequestsMu.Lock()
-		defer raft.kvRequestsMu.Unlock()
+		raft.leaderStateMu.Lock()
+		defer raft.leaderStateMu.Unlock()
 
 		if raft.state == StateLeader {
 			raft.log.append([]structs.Entry{{
 				Term: raft.currentTerm,
 				Op:   &op,
+				Msg:  msg,
 			}})
-			res := raft.stateMachine.apply(op)
-			if err := raft.node.Reply(msg, res); err != nil {
-				panic(err)
-			}
+			//res := raft.stateMachine.apply(op)
+			//if err := raft.node.Reply(msg, res); err != nil {
+			//	panic(err)
+			//}
 		} else if raft.leaderId != "" {
 			// We're not the leader, but we can proxy To one
 			msg.Dest = raft.leaderId

@@ -76,6 +76,7 @@ func (n *Node) Handle(typ string, fn HandlerFunc) {
 // the last function executed by main().
 func (n *Node) Run() error {
 	scanner := bufio.NewScanner(n.Stdin)
+	scanner.Buffer(make([]byte, 0, 8192000), 8192000)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 
@@ -89,7 +90,7 @@ func (n *Node) Run() error {
 		if err := json.Unmarshal(msg.Body, &body); err != nil {
 			return fmt.Errorf("unmarshal message body: %w", err)
 		}
-		log.Printf("Received %s", msg)
+		//log.Printf("Received %s", msg)
 
 		// What handler should we use for this message?
 		if body.InReplyTo != 0 {
@@ -222,7 +223,7 @@ func (n *Node) Send(dest string, body any) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	log.Printf("Sent %s", buf)
+	//log.Printf("Sent %s", buf)
 
 	if _, err = n.Stdout.Write(buf); err != nil {
 		return err

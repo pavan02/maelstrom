@@ -1,5 +1,7 @@
 package structs
 
+import maelstrom "github.com/jepsen-io/maelstrom/demo/go"
+
 type Msg struct {
 	Src  string                 `json:"src"`
 	Dest string                 `json:"dest"`
@@ -9,6 +11,7 @@ type Msg struct {
 type Entry struct {
 	Term int
 	Op   *Operation
+	Msg  maelstrom.Message
 }
 
 type Operation struct {
