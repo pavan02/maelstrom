@@ -64,6 +64,7 @@ func (raft *RaftNode) replicateLog() error {
 							raft.matchIndex[_nodeId] = max(raft.matchIndex[_nodeId], _ni+len(_entries)-1)
 							log.Printf("node %s entries %d ni %d\n", _nodeId, len(_entries), ni)
 							log.Println("next index:" + fmt.Sprint(raft.nextIndex))
+							raft.advanceCommitIndex()
 						} else {
 							raft.nextIndex[_nodeId] -= 1
 							log.Printf("raft.nextIndex[_nodeId]: %d\n", raft.nextIndex[_nodeId])

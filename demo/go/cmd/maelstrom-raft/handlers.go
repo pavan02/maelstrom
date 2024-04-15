@@ -54,7 +54,6 @@ func (raft *RaftNode) appendEntries(msg maelstrom.Message) error {
 	raft.appendEntriesHandlerMu.Lock()
 	defer raft.appendEntriesHandlerMu.Unlock()
 
-	log.Println("begin func appendEntries", msg)
 	var appendEntriesMsgBody structs.AppendEntriesMsgBody
 	err := json.Unmarshal(msg.Body, &appendEntriesMsgBody)
 	if err != nil {
@@ -71,13 +70,14 @@ func (raft *RaftNode) appendEntries(msg maelstrom.Message) error {
 
 	if appendEntriesMsgBody.Term < raft.currentTerm {
 		// leader is behind us
-		log.Println("leader is behind us func appendEntries", appendEntriesMsgBody.Term, raft.currentTerm)
+		log.Println("leader is behind us func appendEntriesappendEntries", appendEntriesMsgBody.Term, raft.currentTerm)
 		raft.node.Reply(msg, result)
 		return nil
 	}
 
 	// This leader is valid; remember them and don't try to run our own election for a bit
 	//raft.leaderId = appendEntriesMsgBody.LeaderId
+	raft.leaderId = appendEntriesMsgBody.LeaderId
 	raft.resetElectionDeadline()
 
 	// Check previous entry To see if it matches
@@ -101,7 +101,6 @@ func (raft *RaftNode) appendEntries(msg maelstrom.Message) error {
 		raft.commitIndex = min(appendEntriesMsgBody.LeaderCommit, raft.log.size())
 	}
 
-	log.Println("end func appendEntries", msg)
 	// Acknowledge
 	result["success"] = true
 	raft.node.Reply(msg, result)
@@ -114,23 +113,27 @@ func (raft *RaftNode) setupHandlers() error {
 		raft.kvRequestsMu.Lock()
 		defer raft.kvRequestsMu.Unlock()
 
-		if raft.state != StateLeader {
-			raft.node.Reply(msg, &structs.ErrorMsgBody{
+		if raft.state == StateLeader {
+			raft.log.append([]structs.Entry{{
+				Term: raft.currentTerm,
+				Op:   &op,
+			}})
+			res := raft.stateMachine.apply(op)
+			if err := raft.node.Reply(msg, res); err != nil {
+				panic(err)
+			}
+		} else if raft.leaderId != "" {
+			// We're not the leader, but we can proxy To one
+			msg.Dest = raft.leaderId
+			raft.node.Send(raft.leaderId, msg.Body)
+		} else {
+			return raft.node.Reply(msg, &structs.ErrorMsgBody{
 				Type: structs.MsgTypeError,
 				Code: 11,
 				Text: "not a leader",
 			})
 		}
 
-		//op.Client = msg.Src
-		raft.log.append([]structs.Entry{{
-			Term: raft.currentTerm,
-			Op:   &op,
-		}})
-		res := raft.stateMachine.apply(op)
-		if err := raft.node.Reply(msg, res); err != nil {
-			panic(err)
-		}
 		return nil
 	}
 

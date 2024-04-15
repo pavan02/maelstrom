@@ -87,7 +87,7 @@ func (raft *RaftNode) init() error {
 	raft.matchIndex = map[string]int{}
 	raft.commitIndex = 0
 	//raft.lastApplied = 1 // index: 0 -> Op: None
-	//raft.leaderId = ""   // Who do we think the leader is?
+	raft.leaderId = "" // Who do we think the leader is?
 
 	// Components
 	raft.log = newLog()
@@ -232,7 +232,7 @@ func (raft *RaftNode) becomeLeader() error {
 	}
 
 	raft.state = StateLeader
-	//raft.leaderId = ""
+	raft.leaderId = ""
 	raft.lastReplication = 0 // Start replicating immediately
 
 	// We'll start by trying To replicate our most recent entry
@@ -252,18 +252,14 @@ func (raft *RaftNode) becomeLeader() error {
 func (raft *RaftNode) becomeCandidate() {
 	raft.becomeCandidateMu.Lock()
 	defer raft.becomeCandidateMu.Unlock()
-	log.Println("becomeCandidate acquired lock")
-	//if raft.electionDeadline < time.Now().Unix() {
 	raft.state = StateCandidate
 	raft.advanceTerm(raft.currentTerm + 1)
 	raft.votedFor = raft.node.ID()
-	//raft.leaderId = ""
+	raft.leaderId = ""
 	raft.resetElectionDeadline()
 	raft.resetStepDownDeadline()
 	log.Println("Became candidate for term", raft.currentTerm)
 	raft.requestVotes()
-	log.Println("becomeCandidate release Lock")
-	//}
 }
 
 func (raft *RaftNode) becomeFollower() {
@@ -276,7 +272,7 @@ func (raft *RaftNode) becomeFollower() {
 	raft.state = StateFollower
 	raft.nextIndex = nil
 	raft.matchIndex = nil
-	//raft.leaderId = ""
+	raft.leaderId = ""
 	raft.resetElectionDeadline()
 	log.Println("Became follower for term", raft.currentTerm)
 }
@@ -307,19 +303,19 @@ func (raft *RaftNode) becomeFollower() {
 //	return nil
 //}
 
-//
-//func (raft *RaftNode) advanceCommitIndex() (bool, error) {
-//	// If we're the leader, advance our commit index based on what other nodes match us.
-//	if raft.state == StateLeader {
-//		n := median(maps.Values(raft.getMatchIndex()))
-//		if raft.commitIndex < n && raft.log.get(n).Term == raft.currentTerm {
-//			log.Printf("commit index now %d\n", n)
-//			raft.commitIndex = n
-//			return true, nil
-//		}
-//	}
-//	return false, nil
-//}
+func (raft *RaftNode) advanceCommitIndex() {
+	// If we're the leader, advance our commit index based on what other nodes match us.
+	raft.leaderStateMu.Lock()
+	defer raft.leaderStateMu.Unlock()
+	if raft.state == StateLeader {
+		n := median(maps.Values(raft.getMatchIndex()))
+		if raft.commitIndex < n && raft.log.get(n).Term == raft.currentTerm {
+			log.Printf("commit index now %d\n", n)
+			raft.commitIndex = n
+		}
+	}
+}
+
 //
 //func (raft *RaftNode) advanceStateMachine() (bool, error) {
 //	// If we have un-applied committed Entries in the log, apply one To the state machine.

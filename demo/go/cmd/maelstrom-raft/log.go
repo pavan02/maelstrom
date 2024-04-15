@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/pavan/maelstrom/demo/go/cmd/maelstrom-raft/structs"
 	"github.com/samber/lo"
-	logger "log"
 )
 
 type Log struct {
@@ -21,14 +20,13 @@ func (log *Log) init() {
 
 func (log *Log) get(index int) structs.Entry {
 	// Return a log entry by index. Note that Raft's log is 1-indexed.
-	logger.Printf("log.Entries: %s, index: %d", fmt.Sprint(log.Entries), index)
+	//logger.Printf("log.Entries: %s, index: %d", fmt.Sprint(log.Entries), index)
 	return log.Entries[index-1]
 }
 
 func (log *Log) append(entries []structs.Entry) {
 	// Appends multiple entries to the log
 	log.Entries = append(log.Entries, entries...)
-	logger.Println("append: entries", entries)
 }
 
 func (log *Log) last() structs.Entry {
